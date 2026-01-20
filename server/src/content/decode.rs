@@ -5,7 +5,7 @@ use crate::model::enums::PostType;
 use image::{
     DynamicImage, ImageBuffer, ImageFormat, ImageReader, ImageResult, Limits, Rgb, RgbImage,
 };
-use jxl_oxide::{JxlImage, Rgba8};
+use jxl_oxide::JxlImage;
 use std::fs::File;
 use std::io::{BufReader, Cursor};
 use std::path::Path;
@@ -43,19 +43,22 @@ pub fn image(bytes: &[u8], format: ImageFormat) -> ImageResult<DynamicImage> {
     reader.decode()
 }
 
-/// Decode a JPEG XL image using jxl-oxide.
+/// Decode a JPEG XL image using jxl-oxide 0.12.5
 fn image_jxl(bytes: &[u8]) -> ApiResult<DynamicImage> {
-    use std::io::Cursor;
-
     // Read JXL image from memory
     let jxl = JxlImage::read_with_defaults(Cursor::new(bytes))
         .map_err(ApiError::from)?;
 
-    // Render the first frame as RGBA8
-    let frame = jxl.render_frame::<Rgba8>(0).map_err(ApiError::from)?;
+    // Render the first frame
+    let render = jxl.render_frame(0).map_err(ApiError::from)?;
+
+    // Get pixels, width, height
+    let pixels = render.to_rgba8();
+    let width = render.width() as u32;
+    let height = render.height() as u32;
 
     let buffer: ImageBuffer<image::Rgba<u8>, _> =
-        ImageBuffer::from_raw(frame.width as u32, frame.height as u32, frame.pixels)
+        ImageBuffer::from_raw(width, height, pixels)
             .expect("frame pixel buffer has correct length");
 
     Ok(DynamicImage::ImageRgba8(buffer))
