@@ -18,7 +18,7 @@ dotenvy = "0.15.7"
 flate2 = "1.0.35"
 hex = "0.4.3"
 image = { version = "0.25.5", features = ["avif-native"] }
-jxl = "0.2.2"
+jxl-oxide = "0.12.4"
 lettre = { version = "0.11.12", features = ["serde"] }
 md5 = "0.7.0"
 num-traits = "0.2.19"
