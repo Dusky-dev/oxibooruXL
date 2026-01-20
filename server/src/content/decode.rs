@@ -5,7 +5,7 @@ use crate::model::enums::PostType;
 use image::{
     DynamicImage, ImageBuffer, ImageFormat, ImageReader, ImageResult, Limits, Rgb, RgbImage,
 };
-use jxl::decode::Decoder as JxlDecoder;
+use jxl_oxide::{JxlImage, render::Rgba8};
 use std::fs::File;
 use std::io::{BufReader, Cursor};
 use std::path::Path;
@@ -23,25 +23,36 @@ pub fn representative_image(
 ) -> ApiResult<DynamicImage> {
     match PostType::from(file_contents.mime_type) {
         PostType::Image | PostType::Animation => {
-            // If image-rs does not recognize the format, try JPEG XL
-            if file_contents.mime_type.to_image_format().is_none() {
-                image_jxl(&file_contents.data)
-            } else {
-                let image_format = file_contents
-                    .mime_type
-                    .to_image_format()
-                    .expect("Format checked above");
-
-                image(&file_contents.data, image_format).map_err(ApiError::from)
+            match file_contents.mime_type.to_image_format() {
+                Some(format) => image(&file_contents.data, format).map_err(ApiError::from),
+                None => image_jxl(&file_contents.data),
             }
         }
-        PostType::Video => {
-            video_frame(file_path).and_then(|frame| frame.ok_or(ApiError::EmptyVideo))
-        }
-        PostType::Flash => {
-            flash_image(config, file_path).and_then(|frame| frame.ok_or(ApiError::EmptySwf))
-        }
+        PostType::Video => video_frame(file_path)
+            .and_then(|frame| frame.ok_or(ApiError::EmptyVideo)),
+        PostType::Flash => flash_image(config, file_path)
+            .and_then(|frame| frame.ok_or(ApiError::EmptySwf)),
     }
+}
+
+/// Decodes a raw array of bytes into pixel data (image-rs formats only).
+pub fn image(bytes: &[u8], format: ImageFormat) -> ImageResult<DynamicImage> {
+    let mut reader = ImageReader::new(Cursor::new(bytes));
+    reader.set_format(format);
+    reader.limits(image_reader_limits());
+    reader.decode()
+}
+
+/// Decode a JPEG XL image using `jxl-oxide`.
+fn image_jxl(bytes: &[u8]) -> ApiResult<DynamicImage> {
+    let jxl = JxlImage::from_bytes(bytes).map_err(ApiError::from)?;
+    let frame = jxl.render_frame::<Rgba8>(0).map_err(ApiError::from)?;
+
+    let buffer: ImageBuffer<image::Rgba<u8>, _> =
+        ImageBuffer::from_raw(frame.width as u32, frame.height as u32, frame.pixels)
+            .expect("frame pixel buffer has correct length");
+
+    Ok(DynamicImage::ImageRgba8(buffer))
 }
 
 /// Returns if the video at `path` has an audio channel.
@@ -70,30 +81,6 @@ pub fn swf_has_audio(path: &Path) -> ApiResult<bool> {
                 | Tag::StartSound2 { .. }
         )
     }))
-}
-
-/// Decodes a raw array of bytes into pixel data (image-rs formats only).
-pub fn image(bytes: &[u8], format: ImageFormat) -> ImageResult<DynamicImage> {
-    let mut reader = ImageReader::new(Cursor::new(bytes));
-    reader.set_format(format);
-    reader.limits(image_reader_limits());
-    reader.decode()
-}
-
-/// Decode a JPEG XL image using `jxl = 0.2.2`.
-fn image_jxl(bytes: &[u8]) -> ApiResult<DynamicImage> {
-    let mut decoder = JxlDecoder::new(bytes);
-    let image = decoder.decode().map_err(ApiError::from)?;
-
-    let width = image.width() as u32;
-    let height = image.height() as u32;
-    let rgba = image.into_rgba8();
-
-    let buffer: ImageBuffer<image::Rgba<u8>, _> =
-        ImageBuffer::from_raw(width, height, rgba)
-            .expect("JXL decoder returned invalid buffer");
-
-    Ok(DynamicImage::ImageRgba8(buffer))
 }
 
 /// Decodes first frame of video contents.
