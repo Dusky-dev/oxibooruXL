@@ -5,7 +5,7 @@ use crate::model::enums::PostType;
 use image::{
     DynamicImage, ImageBuffer, ImageFormat, ImageReader, ImageResult, Limits, Rgb, RgbImage,
 };
-use jxl_oxide::{JxlImage, render::Rgba8};
+use jxl_oxide::{JxlImage, Rgba8};
 use std::fs::File;
 use std::io::{BufReader, Cursor};
 use std::path::Path;
@@ -35,7 +35,7 @@ pub fn representative_image(
     }
 }
 
-/// Decodes a raw array of bytes into pixel data (image-rs formats only).
+/// Decode standard image formats using image-rs.
 pub fn image(bytes: &[u8], format: ImageFormat) -> ImageResult<DynamicImage> {
     let mut reader = ImageReader::new(Cursor::new(bytes));
     reader.set_format(format);
@@ -43,9 +43,15 @@ pub fn image(bytes: &[u8], format: ImageFormat) -> ImageResult<DynamicImage> {
     reader.decode()
 }
 
-/// Decode a JPEG XL image using `jxl-oxide`.
+/// Decode a JPEG XL image using jxl-oxide.
 fn image_jxl(bytes: &[u8]) -> ApiResult<DynamicImage> {
-    let jxl = JxlImage::from_bytes(bytes).map_err(ApiError::from)?;
+    use std::io::Cursor;
+
+    // Read JXL image from memory
+    let jxl = JxlImage::read_with_defaults(Cursor::new(bytes))
+        .map_err(ApiError::from)?;
+
+    // Render the first frame as RGBA8
     let frame = jxl.render_frame::<Rgba8>(0).map_err(ApiError::from)?;
 
     let buffer: ImageBuffer<image::Rgba<u8>, _> =
