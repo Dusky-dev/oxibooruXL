@@ -1,17 +1,17 @@
 use crate::api::error::{ApiError, ApiResult};
 use crate::config::Config;
-use crate::content::{flash, FileContents};
+use crate::content::{flash, FileContents, MimeType};
 use crate::model::enums::PostType;
 use image::{
     DynamicImage, ImageBuffer, ImageFormat, ImageReader, ImageResult, Limits, Rgb, RgbImage,
 };
-use jxl;
+use jxl::Decoder;
 use std::fs::File;
 use std::io::{BufReader, Cursor};
 use std::path::Path;
 use swf::Tag;
 use tracing::error;
-use video_rs::Decoder;
+use video_rs::Decoder as VideoDecoder;
 use video_rs::ffmpeg::format::Pixel;
 use video_rs::ffmpeg::media::Type;
 
@@ -26,13 +26,14 @@ pub fn representative_image(
 ) -> ApiResult<DynamicImage> {
     match PostType::from(file_contents.mime_type) {
         PostType::Image | PostType::Animation => {
-            if file_contents.mime_type == "image/jxl" {
+            // --- JPEG XL special case ---
+            if matches!(file_contents.mime_type, MimeType::ImageJxl) {
                 image_jxl(&file_contents.data)
             } else {
                 let image_format = file_contents
                     .mime_type
                     .to_image_format()
-                    .expect("Mime type should be convertable to image format");
+                    .expect("Mime type should be convertible to image format");
 
                 image(&file_contents.data, image_format).map_err(ApiError::from)
             }
@@ -74,7 +75,7 @@ pub fn swf_has_audio(path: &Path) -> ApiResult<bool> {
     }))
 }
 
-/// Decodes a raw array of bytes into pixel data (image-rs supported formats only).
+/// Decodes a raw array of bytes into pixel data (image-rs formats only).
 pub fn image(bytes: &[u8], format: ImageFormat) -> ImageResult<DynamicImage> {
     let mut reader = ImageReader::new(Cursor::new(bytes));
     reader.set_format(format);
@@ -82,29 +83,27 @@ pub fn image(bytes: &[u8], format: ImageFormat) -> ImageResult<DynamicImage> {
     reader.decode()
 }
 
-/// Decode a JPEG XL image into a DynamicImage.
+/// Decode a JPEG XL image into a DynamicImage using `jxl = 0.2.x`.
 fn image_jxl(bytes: &[u8]) -> ApiResult<DynamicImage> {
-    let decoded = jxl::decode(bytes)
-        .map_err(|e| ApiError::ImageDecode(format!("JXL decode failed: {e}")))?;
+    let mut decoder = Decoder::new(bytes);
 
-    let width = decoded.width as u32;
-    let height = decoded.height as u32;
+    let image = decoder.decode().map_err(ApiError::from)?;
 
-    let rgba = decoded
-        .render()
-        .map_err(|e| ApiError::ImageDecode(format!("JXL render failed: {e}")))?
-        .into_rgba8();
+    let width = image.width() as u32;
+    let height = image.height() as u32;
+
+    let rgba = image.into_rgba8();
 
     let buffer: ImageBuffer<image::Rgba<u8>, _> =
         ImageBuffer::from_raw(width, height, rgba)
-            .ok_or(ApiError::ImageDecode("Invalid JXL buffer".into()))?;
+            .ok_or(ApiError::InvalidImage)?;
 
     Ok(DynamicImage::ImageRgba8(buffer))
 }
 
 /// Decodes first frame of video contents.
 fn video_frame(path: &Path) -> ApiResult<Option<DynamicImage>> {
-    let mut decoder = Decoder::new(path)?;
+    let mut decoder = VideoDecoder::new(path)?;
     let frame = decoder.decode_raw()?;
 
     if frame.planes() == 0 {
