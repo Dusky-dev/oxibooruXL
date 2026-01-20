@@ -1,11 +1,11 @@
 use crate::api::error::{ApiError, ApiResult};
 use crate::config::Config;
-use crate::content::{flash, FileContents, MimeType};
+use crate::content::{flash, FileContents};
 use crate::model::enums::PostType;
 use image::{
     DynamicImage, ImageBuffer, ImageFormat, ImageReader, ImageResult, Limits, Rgb, RgbImage,
 };
-use jxl::Decoder;
+use jxl::decode::Decoder as JxlDecoder;
 use std::fs::File;
 use std::io::{BufReader, Cursor};
 use std::path::Path;
@@ -16,9 +16,6 @@ use video_rs::ffmpeg::format::Pixel;
 use video_rs::ffmpeg::media::Type;
 
 /// Returns a representative image for the given content.
-/// For images, this is simply the decoded image.
-/// For videos, it is the first frame of the video.
-/// For Flash media, it is the largest image that can be decoded from the Flash tags.
 pub fn representative_image(
     config: &Config,
     file_contents: &FileContents,
@@ -26,14 +23,14 @@ pub fn representative_image(
 ) -> ApiResult<DynamicImage> {
     match PostType::from(file_contents.mime_type) {
         PostType::Image | PostType::Animation => {
-            // --- JPEG XL special case ---
-            if matches!(file_contents.mime_type, MimeType::ImageJxl) {
+            // If image-rs does not recognize the format, try JPEG XL
+            if file_contents.mime_type.to_image_format().is_none() {
                 image_jxl(&file_contents.data)
             } else {
                 let image_format = file_contents
                     .mime_type
                     .to_image_format()
-                    .expect("Mime type should be convertible to image format");
+                    .expect("Format checked above");
 
                 image(&file_contents.data, image_format).map_err(ApiError::from)
             }
@@ -83,20 +80,18 @@ pub fn image(bytes: &[u8], format: ImageFormat) -> ImageResult<DynamicImage> {
     reader.decode()
 }
 
-/// Decode a JPEG XL image into a DynamicImage using `jxl = 0.2.x`.
+/// Decode a JPEG XL image using `jxl = 0.2.2`.
 fn image_jxl(bytes: &[u8]) -> ApiResult<DynamicImage> {
-    let mut decoder = Decoder::new(bytes);
-
+    let mut decoder = JxlDecoder::new(bytes);
     let image = decoder.decode().map_err(ApiError::from)?;
 
     let width = image.width() as u32;
     let height = image.height() as u32;
-
     let rgba = image.into_rgba8();
 
     let buffer: ImageBuffer<image::Rgba<u8>, _> =
         ImageBuffer::from_raw(width, height, rgba)
-            .ok_or(ApiError::InvalidImage)?;
+            .expect("JXL decoder returned invalid buffer");
 
     Ok(DynamicImage::ImageRgba8(buffer))
 }
@@ -159,7 +154,7 @@ fn flash_image(config: &Config, path: &Path) -> ApiResult<Option<DynamicImage>> 
         .filter_map(|image_result| match image_result {
             Ok(image) => Some(image),
             Err(err) => {
-                error!("Failure to decode flash image for reason: {err}");
+                error!("Failure to decode flash image: {err}");
                 None
             }
         })
@@ -171,14 +166,12 @@ fn flash_image(config: &Config, path: &Path) -> ApiResult<Option<DynamicImage>> 
 
     images.sort_by_key(|image| {
         let (thumbnail_width, thumbnail_height) = config.thumbnails.post_dimensions();
-
         let effective_width =
             if image.width() * thumbnail_height > thumbnail_width * image.height() {
                 image.height() * thumbnail_width / thumbnail_height
             } else {
                 image.width()
             };
-
         u32::MAX - effective_width
     });
 
@@ -188,7 +181,6 @@ fn flash_image(config: &Config, path: &Path) -> ApiResult<Option<DynamicImage>> 
 /// Returns maximum decoded image size.
 fn image_reader_limits() -> Limits {
     const GB: u64 = 1024_u64.pow(3);
-
     let mut limits = Limits::no_limits();
     limits.max_alloc = Some(4 * GB);
     limits
@@ -204,6 +196,5 @@ fn rgb24_frame(video_frame: &[u8], width: u32, height: u32, stride: usize) -> Dy
             video_frame[offset + 2],
         ])
     });
-
     DynamicImage::ImageRgb8(rgb_image)
 }
