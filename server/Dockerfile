@@ -16,9 +16,24 @@ FROM chef AS builder
 
 ENV DOCKER_DEPLOYMENT=1
 
-# Install system dependencies
-RUN apk update && apk add --no-cache pkgconfig clang-dev postgresql-dev dav1d-dev ffmpeg-dev
+# Install build dependencies
+RUN apk update && apk add --no-cache \
+    pkgconfig clang-dev cmake make ninja git bash \
+    postgresql-dev dav1d-dev ffmpeg-dev curl
 
+# Build libjxl from source
+WORKDIR /opt/jxl
+RUN git clone --depth=1 https://github.com/libjxl/libjxl.git . \
+ && mkdir build && cd build \
+ && cmake -DCMAKE_BUILD_TYPE=Release \
+          -DBUILD_TESTING=OFF \
+          -DBUILD_BENCHMARKS=OFF \
+          -DBUILD_EXAMPLES=OFF \
+          -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+          .. \
+ && cmake --build . --target install
+
+WORKDIR /opt/app
 COPY --from=planner /opt/app/recipe.json recipe.json
 
 # Build dependencies (this will be cached for future builds)
@@ -26,7 +41,7 @@ ARG TARGET_CPU
 ARG CODEGEN_OPTIONS="-C target-feature=-crt-static -C target-cpu=$TARGET_CPU"
 RUN RUSTFLAGS=${CODEGEN_OPTIONS} cargo chef cook --release --recipe-path recipe.json
 
-# Buid application
+# Build application
 COPY . .
 RUN RUSTFLAGS=${CODEGEN_OPTIONS} cargo build --release
 
@@ -40,7 +55,8 @@ ARG PUID=1000
 ARG PGID=1000
 
 # Install dynamic libs needed at runtime
-RUN apk update && apk add --no-cache libpq ffmpeg-libavdevice
+RUN apk update && apk add --no-cache libpq ffmpeg-libavdevice \
+    libstdc++ libgcc
 
 # Set permissions
 RUN mkdir -p /opt/app /data \
@@ -48,7 +64,8 @@ RUN mkdir -p /opt/app /data \
  && adduser -SDH -h /opt/app -g '' -G app -u ${PUID} app \
  && chown -R app:app /opt/app /data
 
-# Copy over application binary
+# Copy over application binary and libjxl shared libs
+COPY --from=builder /usr/local/lib /usr/local/lib
 COPY --from=builder /opt/app/target/release/server server
 
 # Run it!
