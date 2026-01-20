@@ -16,10 +16,10 @@ FROM chef AS builder
 
 ENV DOCKER_DEPLOYMENT=1
 
-# Install build dependencies
+# Install build dependencies (GCC only, no clang)
 RUN apk update && apk add --no-cache \
-    pkgconfig clang-dev cmake make ninja git bash \
-    postgresql-dev dav1d-dev ffmpeg-dev curl
+    pkgconfig cmake make g++ ninja git bash curl \
+    postgresql-dev dav1d-dev ffmpeg-dev
 
 # Build libjxl from source
 WORKDIR /opt/jxl
@@ -33,10 +33,11 @@ RUN git clone --depth=1 https://github.com/libjxl/libjxl.git . \
           .. \
  && cmake --build . --target install
 
+# Go back to app
 WORKDIR /opt/app
 COPY --from=planner /opt/app/recipe.json recipe.json
 
-# Build dependencies (this will be cached for future builds)
+# Build dependencies (cached)
 ARG TARGET_CPU
 ARG CODEGEN_OPTIONS="-C target-feature=-crt-static -C target-cpu=$TARGET_CPU"
 RUN RUSTFLAGS=${CODEGEN_OPTIONS} cargo chef cook --release --recipe-path recipe.json
@@ -54,7 +55,7 @@ ENV RUST_BACKTRACE=full
 ARG PUID=1000
 ARG PGID=1000
 
-# Install dynamic libs needed at runtime
+# Install runtime libraries
 RUN apk update && apk add --no-cache libpq ffmpeg-libavdevice \
     libstdc++ libgcc
 
